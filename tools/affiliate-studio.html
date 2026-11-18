@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>โรงงานคลิปขายของ Affiliate</title>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f0a12;--card:#1a1320;--line:#2e2236;--red:#e11d48;--blue:#2563eb;--txt:#f3eef6;--mut:#a99bb3;--gold:#fbbf24}
+*{box-sizing:border-box}
+body{margin:0;font-family:Prompt,sans-serif;background:var(--bg);color:var(--txt)}
+header{position:sticky;top:0;z-index:5;background:#140d18ee;backdrop-filter:blur(6px);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+header h1{font-size:18px;margin:0 12px 0 0;color:var(--gold)}
+header a{color:var(--txt);text-decoration:none;font-size:13px;padding:6px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+header a:hover{border-color:var(--red)}
+main{max-width:1200px;margin:0 auto;padding:16px}
+.step{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+.step h2{margin:0 0 12px;font-size:17px}
+.step h2 b{background:var(--red);border-radius:50%;display:inline-block;width:26px;height:26px;text-align:center;line-height:26px;margin-right:8px;font-size:14px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
+label{font-size:13px;color:var(--mut);display:block;margin-bottom:4px}
+input,textarea,select{width:100%;background:#0f0a12;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:10px;font-family:inherit;font-size:14px}
+textarea{min-height:70px;resize:vertical}
+.tpls{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}
+.tpl{cursor:pointer;border:2px solid var(--line);border-radius:12px;overflow:hidden;background:#140d18;transition:.15s}
+.tpl:hover{transform:translateY(-2px)}
+.tpl.on{border-color:var(--red);box-shadow:0 0 0 3px #e11d4855}
+.tpl .pic{aspect-ratio:9/12;display:flex;align-items:center;justify-content:center;font-size:56px;position:relative}
+.tpl .pic span{position:absolute;bottom:6px;right:8px;font-size:10px;background:#0008;padding:2px 6px;border-radius:6px}
+.tpl .t{padding:8px 10px}
+.tpl .t b{color:var(--gold);font-size:14px;display:block}
+.tpl .t small{color:var(--mut);font-size:11px}
+.out{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
+.box{background:#0f0a12;border:1px solid var(--line);border-radius:10px;padding:12px}
+.box h3{margin:0 0 8px;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.box pre{white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:13px;line-height:1.6;margin:0;max-height:340px;overflow:auto;color:#e5dcea}
+button{font-family:inherit;cursor:pointer;border:0;border-radius:8px;padding:8px 14px;font-size:13px;color:#fff;background:var(--blue)}
+button.big{background:var(--red);font-size:16px;padding:12px 24px;font-weight:600}
+button.ghost{background:transparent;border:1px solid var(--line)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.hint{font-size:12px;color:var(--mut);margin-top:6px}
+.saved{display:flex;gap:6px;flex-wrap:wrap}
+.saved button{background:#2a1f30;font-size:12px;padding:5px 10px}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#16a34a;padding:10px 18px;border-radius:10px;display:none;z-index:9}
+</style>
+</head>
+<body>
+<header>
+  <h1>🛒 โรงงานคลิป Affiliate</h1>
+  <a href="https://chatgpt.com/" target="_blank">ChatGPT (ทำรูป)</a>
+  <a href="https://grok.com/imagine" target="_blank">Grok (ทำวิดีโอ)</a>
+  <a href="https://affiliate.shopee.co.th/" target="_blank">Shopee Affiliate</a>
+  <a href="https://www.tiktok.com/" target="_blank">TikTok</a>
+  <a href="https://www.capcut.com/" target="_blank">CapCut</a>
+</header>
+<main>
+
+<section class="step">
+  <h2><b>1</b>ใส่ข้อมูลสินค้า</h2>
+  <div class="grid2">
+    <div><label>ชื่อสินค้า *</label><input id="name" placeholder="เช่น แก้วเก็บความเย็น TYESO 750ml"></div>
+    <div><label>หัวข้อใหญ่บนรูป (ไม่ใส่ = ใช้ชื่อสินค้า)</label><input id="headline" placeholder="เช่น แก้วเก็บอุณหภูมิ พกได้ทุกทริป!"></div>
+    <div><label>จุดเด่น 2-3 ข้อ (คั่นด้วย ,)</label><input id="feat" placeholder="เก็บเย็น 24 ชม., กันรั่ว, ฝา 2in1"></div>
+    <div><label>ราคา / โปร (ถ้ามี)</label><input id="price" placeholder="เช่น เหลือ 199.- ส่งฟรี"></div>
+    <div><label>ขายใคร</label><input id="who" placeholder="เช่น วัยทำงาน, แม่บ้าน, สายเที่ยว"></div>
+    <div><label>ลิงก์ Affiliate</label><input id="link" placeholder="https://s.shopee.co.th/..."></div>
+  </div>
+  <div class="row"><button class="ghost" onclick="saveProduct()">💾 เก็บสินค้านี้ไว้</button><div class="saved" id="saved"></div></div>
+  <div class="hint">เคล็ดลับ: ตอนวาง prompt ใน ChatGPT ให้ <b>แนบรูปสินค้าจริงไปด้วย</b> รูปจะออกมาเหมือนของจริง</div>
+</section>
+
+<section class="step">
+  <h2><b>2</b>เลือกสไตล์คลิป</h2>
+  <div class="tpls" id="tpls"></div>
+</section>
+
+<section class="step" style="text-align:center">
+  <button class="big" onclick="gen()">⚡ สร้าง Prompt</button>
+</section>
+
+<section class="step" id="result" style="display:none">
+  <h2><b>3</b>คัดลอกไปใช้</h2>
+  <div class="out">
+    <div class="box"><h3>🖼️ รูปปก → ChatGPT <button onclick="cp('pImg')">คัดลอก</button></h3><pre id="pImg"></pre></div>
+    <div class="box"><h3>🎬 วิดีโอ 8 วิ → Grok <button onclick="cp('pVid')">คัดลอก</button></h3><pre id="pVid"></pre></div>
+    <div class="box"><h3>✍️ แคปชั่น + แฮชแท็ก <button onclick="cp('pCap')">คัดลอก</button></h3><pre id="pCap"></pre></div>
+  </div>
+  <div class="hint">ขั้นตอน: ① วาง prompt รูปใน ChatGPT (แนบรูปสินค้า) → ② เอารูปที่ได้ไปใส่ Grok แล้ววาง prompt วิดีโอ → ③ ตัดต่อเพิ่มเสียงใน CapCut → ④ โพสต์พร้อมแคปชั่น</div>
+</section>
+</main>
+<div class="toast" id="toast">คัดลอกแล้ว ✓</div>
+
+<script>
+const T=[
+ {id:'ugc',e:'🙋‍♀️',bg:'#f472b6,#fb923c',n:'UGC สาวรีวิว',d:'สาวไทยถือสินค้า ยิ้มสดใส',
+  scene:'a cheerful young Thai woman in her 20s holding the product close to the camera, pointing at it with an excited smile, bright modern room background',
+  v:['Close-up: the woman lifts the product into frame and smiles at camera','She demonstrates using the product, camera slowly pushes in','She gives a thumbs up next to the product, text area left empty for caption']},
+ {id:'mascot',e:'🧸',bg:'#a78bfa,#60a5fa',n:'มาสคอตน่ารัก 3D',d:'ตัวการ์ตูนแนะนำสินค้า',
+  scene:'a cute 3D Pixar-style mascot character (fluffy bear) presenting the product with a big smile, colorful soft background with sparkles',
+  v:['The cute mascot pops into frame and waves','The mascot hugs and presents the product, sparkles around','The mascot winks and points at the product']},
+ {id:'alive',e:'🤪',bg:'#fde047,#f472b6',n:'สินค้ามีชีวิต',d:'ตัวสินค้ามีหน้าตา ขยับได้',
+  scene:'the product itself brought to life as a cute 3D character with big eyes and a happy face, playful pastel studio background',
+  v:['The product character blinks awake and smiles','It bounces happily showing off its features','It jumps toward the camera with a cheerful pose']},
+ {id:'pov',e:'✋',bg:'#94a3b8,#38bdf8',n:'POV ถือมือเดียว',d:'เห็นแค่มือ ไม่เห็นหน้า',
+  scene:'first-person POV, one hand holding the product in front of the camera, real-life location background (airport, cafe or street), natural daylight',
+  v:['POV hand brings the product into frame','Hand rotates the product slowly to show details','Hand uses the product in a real situation']},
+ {id:'studio',e:'💡',bg:'#1e293b,#6366f1',n:'สตูดิโอพรีเมียม',d:'จัดแสงสวย ไม่มีคน',
+  scene:'premium product photography, product on a glossy pedestal, dramatic studio lighting, water droplets or light streaks, luxury feel, no people',
+  v:['Slow cinematic orbit around the product','Macro close-up sliding across product details','Pull back to hero shot with light flare']},
+ {id:'uncle',e:'😎',bg:'#f59e0b,#ef4444',n:'ลุงหัวโตขายของ',d:'ฮาๆ ตลาดนัด',
+  scene:'a funny Thai uncle with a big caricature head, sunglasses and loincloth scarf, excitedly presenting the product at a busy Thai market',
+  v:['Uncle jumps into frame laughing','Uncle shows the product to the camera dramatically','Uncle points at camera like saying buy now']},
+ {id:'market',e:'🏮',bg:'#dc2626,#f59e0b',n:'พ่อค้าบูธตลาดนัด',d:'บูธขายของ ไฟประดับ',
+  scene:'an energetic young Thai seller at a night-market booth full of the product stacked neatly, warm string lights, lively atmosphere',
+  v:['Seller waves customers over at the booth','Seller picks up the product and shows it','Seller gives an OK sign with products behind']},
+ {id:'giant',e:'🦖',bg:'#16a34a,#0ea5e9',n:'CGI สินค้ายักษ์',d:'สินค้าใหญ่กลางเมือง',
+  scene:'CGI scene of a giant oversized version of the product standing in the middle of a city street, people looking up amazed, epic angle',
+  v:['Wide shot: giant product appears in the city','Low angle looking up at the giant product','Product glows as crowd cheers']},
+ {id:'kitchen',e:'🍳',bg:'#fb923c,#facc15',n:'UGC ในครัว',d:'สาธิตในบ้านจริง',
+  scene:'a friendly Thai housewife demonstrating the product in a clean bright home kitchen, natural window light, cozy feeling',
+  v:['She picks up the product from the counter','She demonstrates using it in the kitchen','She smiles holding the result to camera']},
+ {id:'fashion',e:'👗',bg:'#ec4899,#8b5cf6',n:'สวมใส่โชว์',d:'เสื้อผ้า รองเท้า เครื่องประดับ',
+  scene:'a stylish Thai model wearing the product, full-body fashion pose on a trendy street or cafe, soft natural light',
+  v:['Model walks toward camera wearing the product','Model turns to show the outfit from the side','Close-up of product detail then model smiles']},
+ {id:'auntie',e:'🥰',bg:'#f97316,#e11d48',n:'ป้าเฟรนลี่',d:'มนุษย์ป้ารีวิว ตลกอบอุ่น',
+  scene:'a cheerful chubby Thai auntie in a floral shirt happily reviewing the product at home, big expressive smile, thumbs up',
+  v:['Auntie excitedly shows the product','Auntie uses it and makes a wow face','Auntie gives a big thumbs up laughing']},
+ {id:'sport',e:'⚽',bg:'#2563eb,#22c55e',n:'สายสปอร์ต',d:'ฟิตเนส กีฬา',
+  scene:'a sporty young Thai athlete using the product in a gym or sports field, dynamic action pose, energetic lighting',
+  v:['Athlete grabs the product in slow motion','Fast action using the product','Athlete poses confidently with the product']},
+];
+let sel='ugc';
+const $=id=>document.getElementById(id);
+function renderT(){ $('tpls').innerHTML=T.map(t=>`<div class="tpl ${t.id===sel?'on':''}" onclick="pick('${t.id}')"><div class="pic" style="background:linear-gradient(160deg,${t.bg})">${t.e}<span>9:16</span></div><div class="t"><b>${t.n}</b><small>${t.d}</small></div></div>`).join('') }
+function pick(id){sel=id;renderT()}
+function v(id){return $(id).value.trim()}
+function gen(){
+  const name=v('name'); if(!name){$('name').focus();toast('ใส่ชื่อสินค้าก่อนนะ','#dc2626');return}
+  const t=T.find(x=>x.id===sel), head=v('headline')||name;
+  const feats=v('feat').split(/[,،]/).map(s=>s.trim()).filter(Boolean).slice(0,3);
+  const price=v('price'), who=v('who');
+  const badges=feats.length?feats.map(f=>`"${f}"`).join(', '):'(no badges)';
+  $('pImg').textContent=
+`Create a vertical 9:16 Thai TikTok product advertisement image.
+Product: ${name} (use the attached product photo, keep the product shape, color and logo exactly the same).
+Scene: ${t.scene}.
+Text on image (Thai language, spelled exactly):
+- Big bold headline at top: "${head}" — thick 3D Thai font, yellow/white with red outline, very eye-catching
+- Small round badges with icons: ${badges}${price?`\n- Price sticker at bottom: "${price}"`:''}
+Style: ultra-realistic, vivid saturated colors, sharp details, professional Thai e-commerce ad, high click-through thumbnail.${who?`\nTarget audience: ${who}.`:''}`;
+  $('pVid').textContent=
+`Animate this image into an 8-second vertical 9:16 video, 3 shots:
+Shot 1 (0-3s): ${t.v[0]}.
+Shot 2 (3-6s): ${t.v[1]}.
+Shot 3 (6-8s): ${t.v[2]}.
+Keep the product exactly the same as the image. Smooth camera movement, realistic motion, bright lighting, upbeat energy. No new text, no subtitles.`;
+  const tag=name.replace(/\s+/g,'').slice(0,20);
+  $('pCap').textContent=
+`🔥 ${head}
+${feats.map(f=>'✅ '+f).join('\n')}${price?`\n💸 ${price}`:''}
+👉 กดลิงก์ในตะกร้า / โปรไฟล์ได้เลย${v('link')?'\n🛒 '+v('link'):''}
+
+#${tag} #ของดีบอกต่อ #รีวิวของดี #tiktokshop #shopee #ของมันต้องมี #นายหน้าtiktokshop`;
+  $('result').style.display='block'; $('result').scrollIntoView({behavior:'smooth'});
+}
+function cp(id){navigator.clipboard.writeText($(id).textContent).then(()=>toast('คัดลอกแล้ว ✓')).catch(()=>toast('คัดลอกไม่ได้ ให้กดค้างแล้วคัดลอกเอง','#dc2626'))}
+function toast(m,c){const t=$('toast');t.textContent=m;t.style.background=c||'#16a34a';t.style.display='block';clearTimeout(t._);t._=setTimeout(()=>t.style.display='none',1800)}
+const F=['name','headline','feat','price','who','link'];
+function load(){try{return JSON.parse(localStorage.getItem('aff_products')||'[]')}catch(e){return[]}}
+function saveProduct(){ if(!v('name'))return toast('ใส่ชื่อสินค้าก่อนนะ','#dc2626'); const o={};F.forEach(f=>o[f]=v(f));o.tpl=sel;
+  const l=load().filter(x=>x.name!==o.name);l.unshift(o);try{localStorage.setItem('aff_products',JSON.stringify(l.slice(0,30)))}catch(e){} showSaved();toast('เก็บแล้ว ✓')}
+function useP(i){const o=load()[i];F.forEach(f=>$(f).value=o[f]||'');if(o.tpl)pick(o.tpl)}
+function showSaved(){$('saved').innerHTML=load().map((o,i)=>`<button onclick="useP(${i})">${o.name.slice(0,18)}</button>`).join('')}
+renderT();showSaved();
+</script>
+</body>
+</html>
