@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>โจ้สตูดิโอ · ตัวช่วยสั่งคลิป</title>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;600;700&family=Sarabun:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f1720;--card:#16212c;--line:#253545;--txt:#e8eef3;--mut:#8ea3b5;--acc:#2ec4a6;--acc2:#ffcf4a;--danger:#ff6b6b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font-family:Sarabun,sans-serif;font-size:15px}
+h1,h2,h3,button,.tab{font-family:Prompt,sans-serif}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{margin:0;font-size:20px}
+header h1 span{color:var(--acc)}
+header small{color:var(--mut)}
+main{max-width:1150px;margin:0 auto;padding:20px 16px 120px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+.card h2{margin:0 0 12px;font-size:17px}
+.card h2 .tag{font-size:12px;background:var(--acc);color:#05261f;padding:2px 8px;border-radius:999px;margin-right:6px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:800px){.grid,.g2{grid-template-columns:1fr}}
+label{display:block;color:var(--mut);font-size:13px;margin:10px 0 5px}
+select,input,textarea{width:100%;background:#0c131a;border:1px solid var(--line);color:var(--txt);border-radius:10px;padding:10px;font:inherit}
+textarea{min-height:70px;resize:vertical}
+.seg{display:flex;gap:8px;flex-wrap:wrap}
+.seg button{flex:1;min-width:140px;background:#0c131a;border:1px solid var(--line);color:var(--txt);padding:10px;border-radius:10px;cursor:pointer;font-size:14px}
+.seg button.on{background:var(--acc);color:#05261f;border-color:var(--acc);font-weight:700}
+.btn{background:var(--acc2);color:#2a1f00;border:0;border-radius:10px;padding:10px 16px;font-weight:700;cursor:pointer;font-size:14px}
+.btn.ghost{background:transparent;color:var(--txt);border:1px solid var(--line)}
+.btn.small{padding:6px 10px;font-size:13px}
+.prod{display:grid;grid-template-columns:110px 1fr auto;gap:12px;align-items:start;border-top:1px dashed var(--line);padding-top:12px;margin-top:12px}
+.prod:first-child{border-top:0;margin-top:0;padding-top:0}
+.thumb{width:110px;height:110px;border:1px dashed var(--line);border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:12px;text-align:center;cursor:pointer;overflow:hidden;background:#0c131a}
+.thumb img{width:100%;height:100%;object-fit:cover}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.out{white-space:pre-wrap;background:#0c131a;border:1px solid var(--line);border-radius:10px;padding:14px;max-height:420px;overflow:auto;font-size:14px;line-height:1.6}
+footer{position:fixed;left:0;right:0;bottom:0;background:#0b1117ee;border-top:1px solid var(--line);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:var(--acc);color:#05261f;padding:10px 16px;border-radius:10px;font-weight:700;display:none;z-index:9}
+.hint{color:var(--mut);font-size:13px}
+</style>
+</head>
+<body>
+<div class="toast" id="toast"></div>
+<header>
+  <div>
+    <h1>🎬 โจ้<span>สตูดิโอ</span> · ตัวช่วยสั่งคลิป</h1>
+    <small>กรอกสินค้า → ตั้งค่า → กดคัดลอก → วางใน Claude</small>
+  </div>
+  <div class="row">
+    <select id="recipeSel" style="width:220px"><option value="">— สูตรที่บันทึกไว้ —</option></select>
+    <button class="btn small ghost" id="recipeDel">ลบสูตร</button>
+    <button class="btn small" id="recipeSave">💾 บันทึกสูตรนี้</button>
+  </div>
+</header>
+
+<main>
+  <div class="card">
+    <h2>อยากทำคลิปแบบไหน</h2>
+    <div class="seg" id="clipType">
+      <button data-v="คลิปขายของปักตะกร้า" class="on">🛒 คลิปขายของปักตะกร้า</button>
+      <button data-v="คลิปคนพูด / พอดแคสต์">🎙 คลิปคนพูด / พอดแคสต์</button>
+      <button data-v="คลิปข่าว 8 วิ 3 ซีน">📰 คลิปข่าว 8 วิ 3 ซีน</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>📦 สินค้า / หัวข้อที่จะทำคลิป</h2>
+    <div id="prods"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn small" id="addProd">+ เพิ่มสินค้า</button>
+      <button class="btn small ghost" id="clearProd">✕ ล้างทั้งหมด</button>
+      <span class="hint">รูปใช้ดูเฉยๆ ตอนส่ง Claude ให้แนบรูปไปด้วย</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2><span class="tag">A</span>คนในคลิป & การโชว์สินค้า</h2>
+      <label>รูปแบบการโชว์</label>
+      <div class="seg" id="showStyle">
+        <button data-v="มือ POV ถือโชว์ (ไม่เห็นหน้า)" class="on">✋ มือ POV ถือโชว์</button>
+        <button data-v="มีพรีเซนเตอร์ถือ">🧑 มีพรีเซนเตอร์</button>
+      </div>
+      <div class="g2">
+        <div><label>ประเภทพรีเซนเตอร์</label><select id="presenter"></select></div>
+        <div><label>จำนวนคนในฉาก</label><select id="people"></select></div>
+        <div><label>การถือ/วางสินค้า</label><select id="hold"></select></div>
+        <div><label>บุคลิก</label><select id="persona"></select></div>
+      </div>
+      <label>ลักษณะคนประจำช่อง (ถ้ามี ใส่ไว้ให้หน้าเหมือนเดิมทุกคลิป)</label>
+      <input id="character" placeholder="เช่น ผู้ชายไทย 30 ปี ผมสั้น ใส่เสื้อเชิ้ตขาว">
+    </div>
+
+    <div class="card">
+      <h2><span class="tag">B</span>เรื่องที่เล่า & ฉาก</h2>
+      <div class="g2">
+        <div><label>มุมเล่าเรื่อง</label><select id="angle"></select></div>
+        <div><label>โครงบท</label><select id="structure"></select></div>
+        <div><label>สถานการณ์</label><select id="situation"></select></div>
+        <div><label>โทนภาพ</label><select id="tone"></select></div>
+        <div><label>สถานที่</label><select id="place"></select></div>
+        <div><label>ความยาว / จำนวนซีน</label><select id="length"></select></div>
+      </div>
+      <label>สิ่งที่อยากเพิ่ม (ไม่บังคับ)</label>
+      <textarea id="extra" placeholder="เช่น ห้ามพูดเกินจริง, เน้นราคาถูก, ใส่โปรวันนี้"></textarea>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>📋 คำสั่งที่จะส่งให้ Claude</h2>
+    <div class="out" id="out"></div>
+  </div>
+</main>
+
+<footer>
+  <div><b id="count">0</b> ชิ้น · <span class="hint" id="status">กรอกสินค้าก่อน</span></div>
+  <button class="btn" id="copy">📋 คัดลอกคำสั่ง ไปวางใน Claude</button>
+</footer>
+
+<script>
+const OPT={
+ presenter:["คนไทย (สมจริง)","สาววัยทำงาน","หนุ่มวัยทำงาน","แม่บ้าน","คุณป้า/คุณลุง","วัยรุ่น","นักศึกษา","คนตลก/สายฮา","สายสุขภาพ","สายแต่งหน้า","เชฟ/แม่ครัว","ช่าง/สายซ่อม","คุณแม่ลูกอ่อน","การ์ตูน 3D","มาสคอต"],
+ people:["1 คน","2 คน (คุยกัน)","3 คนขึ้นไป"],
+ hold:["ถือชูให้กล้องเห็นชัด","วางบนโต๊ะแล้วชี้","ใช้งานจริงให้ดู","แกะกล่อง","เทียบก่อน-หลัง"],
+ persona:["เป็นกันเอง","ตื่นเต้น เร็ว","จริงจัง น่าเชื่อถือ","ตลก กวน","อบอุ่น ใจดี","ขี้บ่นแต่ยอมรับว่าดี"],
+ angle:["เล่าเรื่อง → ป้ายยาท้าย","ปัญหา → ทางแก้","รีวิวตรงๆ","ก่อน-หลังใช้","เทียบกับของแพง","ของมันต้องมี","คนรอบตัวถาม","ลองครั้งแรก","5 เหตุผลที่ควรซื้อ","ความลับที่คนไม่รู้","ข่าวด่วน/ฉาว","สิทธิ์ที่คนไม่รู้"],
+ structure:["อัตโนมัติ (เปิดดึงใจ → จุดเด่น → ชวนซื้อ)","เปิดด้วยคำถาม","เปิดด้วยตัวเลขช็อก","เปิดด้วยปัญหา","เล่าเป็นเรื่องสั้น"],
+ situation:["อัตโนมัติ (AI เลือกให้เหมาะกับสินค้า)","ใช้ในชีวิตประจำวัน","รีบตอนเช้า","กลับบ้านเหนื่อย","เที่ยว/เดินทาง","ทำงานออฟฟิศ","ทำกับข้าว","ดูแลลูก","ออกกำลังกาย","ก่อนนอน"],
+ tone:["ปกติ (สมจริง)","สว่าง สดใส","อบอุ่น โทนส้ม","ภาพยนตร์","มินิมอล","สตรีทฟู้ด","สตูดิโอพื้นขาว","ข่าว/ทางการ"],
+ place:["AI เลือกให้","ห้องนั่งเล่น","ห้องครัว","ห้องนอน","ออฟฟิศ","ร้านกาแฟ","ตลาดนัด","ในรถ","ริมถนน","สวน","สตูดิโอ","หน้าบ้าน"],
+ length:["8 วิ · 3 ซีน","15 วิ · 4 ซีน","30 วิ · 6 ซีน","60 วิ · 8 ซีน"]
+};
+const $=id=>document.getElementById(id);
+for(const k in OPT){$(k).innerHTML=OPT[k].map(v=>`<option>${v}</option>`).join("")}
+
+let prods=[];
+function addProd(p={name:"",price:"",points:"",img:""}){prods.push(p);renderProds()}
+function renderProds(){
+ $("prods").innerHTML=prods.length?"":'<div class="hint">ยังไม่มีสินค้า กด "+ เพิ่มสินค้า"</div>';
+ prods.forEach((p,i)=>{
+  const d=document.createElement("div");d.className="prod";
+  d.innerHTML=`<label class="thumb">${p.img?`<img src="${p.img}">`:"แตะเพื่อ<br>ใส่รูป"}<input type="file" accept="image/*" hidden></label>
+  <div><input placeholder="ชื่อสินค้า / หัวข้อข่าว" value="${esc(p.name)}" data-f="name">
+  <div class="g2" style="margin-top:8px"><input placeholder="ราคา (ถ้ามี)" value="${esc(p.price)}" data-f="price"><span></span></div>
+  <textarea placeholder="จุดเด่น / รายละเอียด (พิมพ์สั้นๆ)" data-f="points" style="margin-top:8px">${esc(p.points)}</textarea></div>
+  <button class="btn small ghost">✕</button>`;
+  d.querySelectorAll("[data-f]").forEach(el=>el.oninput=()=>{p[el.dataset.f]=el.value;build()});
+  d.querySelector("input[type=file]").onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{p.img=r.result;renderProds()};r.readAsDataURL(f)};
+  d.querySelector("button").onclick=()=>{prods.splice(i,1);renderProds()};
+  $("prods").appendChild(d);
+ });
+ build();
+}
+function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;")}
+
+document.querySelectorAll(".seg").forEach(g=>g.onclick=e=>{const b=e.target.closest("button");if(!b)return;g.querySelectorAll("button").forEach(x=>x.classList.remove("on"));b.classList.add("on");build()});
+const segVal=id=>$(id).querySelector(".on").dataset.v;
+const FIELDS=["presenter","people","hold","persona","angle","structure","situation","tone","place","length","character","extra"];
+FIELDS.forEach(f=>$(f).addEventListener("input",build));
+
+function build(){
+ const ok=prods.filter(p=>p.name.trim());
+ $("count").textContent=ok.length;
+ $("status").textContent=ok.length?"พร้อมคัดลอก":"กรอกชื่อสินค้าก่อน";
+ const v=Object.fromEntries(FIELDS.map(f=>[f,$(f).value.trim()]));
+ const pov=segVal("showStyle").startsWith("มือ");
+ const list=ok.map((p,i)=>`${i+1}. ${p.name}${p.price?` — ราคา ${p.price}`:""}${p.points?`\n   จุดเด่น: ${p.points}`:""}${p.img?"\n   (แนบรูปสินค้านี้ไปด้วย)":""}`).join("\n")||"(ยังไม่ได้ใส่สินค้า)";
+ $("out").textContent=
+`ช่วยเขียนบทคลิปสั้นแนวตั้ง 9:16 ให้หน่อย
+
+【ประเภทคลิป】 ${segVal("clipType")}
+【ความยาว】 ${v.length}
+
+【สินค้า / หัวข้อ】
+${list}
+
+【คนในคลิป】
+- การโชว์: ${segVal("showStyle")}
+${pov?"":`- พรีเซนเตอร์: ${v.presenter} · ${v.people} · บุคลิก${v.persona}\n`}- การถือ/วางสินค้า: ${v.hold}${v.character?`\n- ลักษณะคนประจำช่อง (ต้องเหมือนเดิมทุกซีน): ${v.character}`:""}
+
+【เรื่องและฉาก】
+- มุมเล่า: ${v.angle}
+- โครงบท: ${v.structure}
+- สถานการณ์: ${v.situation}
+- สถานที่: ${v.place}
+- โทนภาพ: ${v.tone}${v.extra?`\n\n【เพิ่มเติม】\n${v.extra}`:""}
+
+【สิ่งที่อยากได้ แยกทีละซีน】
+1. บทพูดภาษาไทย (สั้น พูดทันในเวลาที่กำหนด) + ข้อความบนจอ
+2. Prompt ภาษาอังกฤษสำหรับทำรูป (ChatGPT) — สินค้าต้องหน้าตาเหมือนรูปจริง
+3. Prompt ภาษาอังกฤษสำหรับทำวิดีโอ (Grok) — บอกท่าทาง กล้อง และเสียงพูดไทย
+4. แคปชั่นโพสต์ + แฮชแท็ก 5 อัน
+
+ห้ามพูดเกินจริงหรืออ้างผลที่พิสูจน์ไม่ได้`;
+}
+
+$("addProd").onclick=()=>addProd();
+$("clearProd").onclick=()=>{prods=[];renderProds()};
+$("copy").onclick=async()=>{
+ if(!prods.some(p=>p.name.trim())){toast("กรอกชื่อสินค้าก่อนนะ");return}
+ try{await navigator.clipboard.writeText($("out").textContent);toast("คัดลอกแล้ว ✓ ไปวางใน Claude ได้เลย")}
+ catch(e){const r=document.createRange();r.selectNodeContents($("out"));const s=getSelection();s.removeAllRanges();s.addRange(r);toast("กด Ctrl+C / คัดลอก ข้อความที่ไฮไลต์ไว้")}
+};
+function toast(t){const el=$("toast");el.textContent=t;el.style.display="block";clearTimeout(el._t);el._t=setTimeout(()=>el.style.display="none",2200)}
+
+// สูตรที่บันทึกไว้
+const KEY="joe-studio-recipes";
+function loadR(){try{return JSON.parse(localStorage.getItem(KEY))||{}}catch(e){return {}}}
+function saveR(r){try{localStorage.setItem(KEY,JSON.stringify(r))}catch(e){toast("เครื่องนี้บันทึกไม่ได้")}}
+function fillR(){const r=loadR();$("recipeSel").innerHTML='<option value="">— สูตรที่บันทึกไว้ ('+Object.keys(r).length+') —</option>'+Object.keys(r).map(n=>`<option>${esc(n)}</option>`).join("")}
+let naming=false;
+$("recipeSave").onclick=()=>{
+ const n=(new Date()).toLocaleString("th-TH",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
+ const name="สูตร "+$("angle").value+" · "+n;
+ const r=loadR();r[name]={seg:{clipType:segVal("clipType"),showStyle:segVal("showStyle")},f:Object.fromEntries(FIELDS.map(f=>[f,$(f).value]))};
+ saveR(r);fillR();$("recipeSel").value=name;toast("บันทึกสูตรแล้ว");
+};
+$("recipeSel").onchange=()=>{
+ const s=loadR()[$("recipeSel").value];if(!s)return;
+ FIELDS.forEach(f=>{if(s.f[f]!=null)$(f).value=s.f[f]});
+ for(const g in s.seg)$(g).querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.v===s.seg[g]));
+ build();toast("ใช้สูตรแล้ว");
+};
+$("recipeDel").onclick=()=>{const n=$("recipeSel").value;if(!n)return;const r=loadR();delete r[n];saveR(r);fillR();toast("ลบสูตรแล้ว")};
+
+fillR();addProd();
+</script>
+</body>
+</html>
