@@ -596,12 +596,43 @@ def watch(args):
         time.sleep(2)
 
 
+def find_google_drive():
+    for letter in "GHIJKLMNOPQRSTUVWXYZDEF":
+        for name in ("My Drive", "ไดรฟ์ของฉัน"):
+            base = Path(f"{letter}:/{name}")
+            try:
+                if base.is_dir():
+                    return base
+            except OSError:
+                pass
+    return None
+
+
+def setup():
+    """One-time setup: use Google Drive automatically when it is installed."""
+    global INPUT, OUTPUT
+    if not SETTINGS["input_folder"]:
+        drive = find_google_drive()
+        if drive:
+            SETTINGS["input_folder"] = str(drive / "AutoEdit" / "ใส่คลิป")
+            SETTINGS["output_folder"] = str(drive / "AutoEdit" / "ผลงาน")
+            SETTINGS_FILE.write_text(json.dumps(SETTINGS, ensure_ascii=False, indent=2), encoding="utf-8")
+            INPUT, OUTPUT = Path(SETTINGS["input_folder"]), Path(SETTINGS["output_folder"])
+    INPUT.mkdir(parents=True, exist_ok=True)
+    OUTPUT.mkdir(parents=True, exist_ok=True)
+    print(f"ใส่คลิปที่:   {INPUT}\nรับผลงานที่: {OUTPUT}", flush=True)
+    if hasattr(os, "startfile"):
+        os.startfile(INPUT)
+    return 0
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Cut silence and caption media from input/.")
     parser.add_argument("--once", action="store_true", help="Process existing files and exit.")
     parser.add_argument("--stop", action="store_true", help="Stop the watcher after the current file.")
+    parser.add_argument("--setup", action="store_true", help="One-time setup (finds Google Drive).")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--draft", dest="draft", action="store_true", help="Write video and SRT to output/รอตรวจ for checking (optional).")
     mode.add_argument("--burn-subtitles", dest="draft", action="store_false", help="Burn subtitles automatically (default); warnings are recorded in the quality report.")
@@ -616,6 +647,8 @@ def main():
     args = parser.parse_args()
     if args.cover_old_subtitles and not args.approve:
         parser.error("--cover-old-subtitles requires --approve.")
+    if args.setup:
+        return setup()
     if args.stop:
         STOP_REQUEST.touch()
         print("Stop requested. The watcher will finish its current file.")
