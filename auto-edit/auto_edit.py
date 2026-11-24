@@ -11,8 +11,22 @@ import time
 
 
 ROOT = Path(__file__).resolve().parent
-INPUT = ROOT / "input"
-OUTPUT = ROOT / "output"
+SETTINGS_FILE = ROOT / "settings.json"
+DEFAULT_SETTINGS = {
+    "input_folder": "",
+    "output_folder": "",
+    "threshold": -38,
+    "min_silence": 0.6,
+    "keep_pause": 0.3,
+    "max_caption_chars": 28,
+}
+if not SETTINGS_FILE.exists():
+    SETTINGS_FILE.write_text(json.dumps(DEFAULT_SETTINGS, ensure_ascii=False, indent=2), encoding="utf-8")
+SETTINGS = {**DEFAULT_SETTINGS, **json.loads(SETTINGS_FILE.read_text(encoding="utf-8-sig"))}
+# Empty = use the input/output folders next to this program. Can point to Google Drive (e.g. G:/My Drive/...).
+INPUT = Path(SETTINGS["input_folder"]) if SETTINGS["input_folder"] else ROOT / "input"
+OUTPUT = Path(SETTINGS["output_folder"]) if SETTINGS["output_folder"] else ROOT / "output"
+FIXES_FILE = ROOT / "word-fixes.txt"
 RUNTIME = ROOT / ".runtime"
 FFMPEG = RUNTIME / "ffmpeg.exe"
 FFPROBE = RUNTIME / "ffprobe.exe"
@@ -145,6 +159,55 @@ def validate_transcript(data, duration_ms):
     return cues, warnings
 
 
+def load_fixes():
+    fixes = []
+    if FIXES_FILE.exists():
+        for line in FIXES_FILE.read_text(encoding="utf-8-sig").splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                wrong, right = (part.strip() for part in line.split("=", 1))
+                if wrong:
+                    fixes.append((wrong, right))
+    return fixes
+
+
+def thai_pieces(text):
+    """Split text into pieces that are safe to break between (never inside a Thai word)."""
+    try:
+        from pythainlp.tokenize import word_tokenize
+        return word_tokenize(text, engine="newmm", keep_whitespace=True)
+    except Exception:
+        return re.split(r"(\s+)", text)
+
+
+def split_cues(cues, max_chars):
+    result = []
+    for cue in cues:
+        text = cue["text"]
+        if len(text) <= max_chars:
+            result.append(cue)
+            continue
+        lines, current = [], ""
+        for piece in thai_pieces(text):
+            if len(current) + len(piece) > max_chars and current.strip():
+                lines.append(current.strip())
+                current = piece
+            else:
+                current += piece
+        if current.strip():
+            if lines and len(current.strip()) < 6:
+                lines[-1] += current.rstrip()
+            else:
+                lines.append(current.strip())
+        total = sum(len(line) for line in lines) or 1
+        start, span = cue["start"], cue["end"] - cue["start"]
+        for line in lines:
+            end = start + span * len(line) / total
+            result.append({"start": round(start), "end": round(end), "text": line})
+            start = end
+        result[-1]["end"] = cue["end"]
+    return result
+
+
 def transcribe(stage, media, language):
     run(FFMPEG, "-v", "error", "-i", media.name,
         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
@@ -160,7 +223,12 @@ def transcribe(stage, media, language):
     # whisper.cpp writes partial UTF-8 bytes for individual Thai tokens in full JSON.
     # Segment text remains complete. Replacement is limited to decoding token fragments.
     data = json.loads((stage / "captions.json").read_text(encoding="utf-8", errors="replace"))
+    fixes = load_fixes()
+    for segment in data["transcription"]:
+        for wrong, right in fixes:
+            segment["text"] = segment["text"].replace(wrong, right)
     cues, warnings = validate_transcript(data, duration_ms)
+    cues = split_cues(cues, int(SETTINGS["max_caption_chars"]))
     subtitles = stage / "captions.srt"
     write_srt(subtitles, cues)
     report = {"model": MODEL.name, "language": language,
@@ -375,7 +443,7 @@ def watch(args):
                 if prior_signature != signature:
                     first_seen = time.monotonic()
                     observed[source] = signature, first_seen
-                if not args.once and time.monotonic() - first_seen < 5:
+                if not args.once and time.monotonic() - first_seen < 15:
                     continue
                 if not signature[0] or attempted.get(source) == signature:
                     continue
@@ -398,7 +466,7 @@ def watch(args):
                 if media.exists() or srt.exists():
                     if media.is_file() and srt.is_file() and quality.is_file():
                         completed = json.loads(quality.read_text(encoding="utf-8"))
-                        if (completed.get("source_sha256") == source_hash and completed.get("settings") == settings
+                        if (completed.get("source_sha256") == source_hash
                                 and completed.get("final_media_sha256") == file_digest(media)
                                 and completed.get("final_srt_sha256") == file_digest(srt)):
                             continue
@@ -432,9 +500,9 @@ def main():
     parser.add_argument("--approve", type=Path, metavar="SRT", help="Burn an edited/reviewed SRT from output/รอตรวจ without retranscribing.")
     parser.add_argument("--cover-old-subtitles", action="store_true", help="With --approve, cover the bottom 20%% of a video before burning the reviewed SRT.")
     parser.add_argument("--language", default="th", help="Spoken language (default: th). Use auto for mixed batches.")
-    parser.add_argument("--threshold", type=float, default=-38, help="Silence threshold in dB.")
-    parser.add_argument("--min-silence", type=float, default=0.40)
-    parser.add_argument("--keep-pause", type=float, default=0.16)
+    parser.add_argument("--threshold", type=float, default=SETTINGS["threshold"], help="Silence threshold in dB.")
+    parser.add_argument("--min-silence", type=float, default=SETTINGS["min_silence"])
+    parser.add_argument("--keep-pause", type=float, default=SETTINGS["keep_pause"])
     args = parser.parse_args()
     if args.cover_old_subtitles and not args.approve:
         parser.error("--cover-old-subtitles requires --approve.")
@@ -448,8 +516,8 @@ def main():
         parser.error("FFmpeg tools are missing from .runtime.")
     if not WHISPER.is_file() or not MODEL.is_file() or not VAD_MODEL.is_file():
         parser.error("Whisper, large-v3, or the Silero VAD model is missing.")
-    INPUT.mkdir(exist_ok=True)
-    OUTPUT.mkdir(exist_ok=True)
+    INPUT.mkdir(parents=True, exist_ok=True)
+    OUTPUT.mkdir(parents=True, exist_ok=True)
     import msvcrt
 
     with (RUNTIME / "watch.lock").open("a+b") as lock:
