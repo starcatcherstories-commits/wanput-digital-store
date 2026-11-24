@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -83,6 +84,18 @@ def cut_and_join(source, ranges, stage, video, output_name, prefix="part"):
         "-c", "copy", "-movflags", "+faststart", output_name, cwd=stage)
     for part in segments:
         (stage / part).unlink(missing_ok=True)
+
+
+def move_into(source, destination):
+    """Move a finished file into output, also when output is on another drive (e.g. Google Drive)."""
+    source, destination = Path(source), Path(destination)
+    try:
+        os.replace(source, destination)
+    except OSError:
+        partial = destination.with_name(destination.name + ".partial")
+        shutil.copyfile(source, partial)
+        os.replace(partial, destination)
+        source.unlink(missing_ok=True)
 
 
 def keep_ranges(log, duration, pause):
@@ -421,8 +434,8 @@ def render_reviewed(subtitles, cover_old_subtitles=False):
             shutil.copy2(draft, completed)
         media.parent.mkdir(parents=True, exist_ok=True)
         final_srt.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(stage / "captions.srt", final_srt)
-        os.replace(completed, media)
+        move_into(stage / "captions.srt", final_srt)
+        move_into(completed, media)
         report["status"] = "reviewed"
         report["covered_old_subtitles"] = cover_old_subtitles
         report["caption_count"] = len(cues)
@@ -478,14 +491,14 @@ def process(source, signature, args):
             raise ValueError("The source changed during transcription. Output was not replaced.")
         if args.draft:
             review = OUTPUT / "รอตรวจ"
-            review.mkdir(exist_ok=True)
+            review.mkdir(parents=True, exist_ok=True)
             report["source_signature"] = list(signature)
             report["status"] = "draft"
             report["draft_sha256"] = file_digest(joined)
             report["media_destination"] = str(media.relative_to(OUTPUT))
             report["subtitle_destination"] = str(srt.relative_to(OUTPUT))
-            os.replace(subtitles, review / srt.name)
-            os.replace(joined, review / media.name)
+            move_into(subtitles, review / srt.name)
+            move_into(joined, review / media.name)
             # The report is the completion marker; write it after both draft files.
             (review / f"{media.stem}.review.json").write_text(
                 json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -502,8 +515,8 @@ def process(source, signature, args):
             raise ValueError("The source changed during processing. It will be picked up again.")
         media.parent.mkdir(parents=True, exist_ok=True)
         srt.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(subtitles, srt)
-        os.replace(final, media)
+        move_into(subtitles, srt)
+        move_into(final, media)
         report["status"] = "automatic"
         report["final_srt_sha256"] = file_digest(srt)
         report["final_media_sha256"] = file_digest(media)
