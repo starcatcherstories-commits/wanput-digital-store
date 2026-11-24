@@ -19,6 +19,9 @@ DEFAULT_SETTINGS = {
     "min_silence": 0.6,
     "keep_pause": 0.3,
     "max_caption_chars": 28,
+    "remove_retakes": True,
+    "remove_fillers": True,
+    "fillers": ["เอ่อ", "อ่า", "อืม", "เออ", "เอิ่ม", "อ้า", "อึม", "เอ่"],
 }
 if not SETTINGS_FILE.exists():
     SETTINGS_FILE.write_text(json.dumps(DEFAULT_SETTINGS, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -56,6 +59,30 @@ def run(program, *arguments, cwd=None):
         raise RuntimeError(f"{program.name} exited with {result.returncode}\n"
                            f"{result.stderr.strip()[-3000:]}")
     return result
+
+
+def cut_and_join(source, ranges, stage, video, output_name, prefix="part"):
+    segments = []
+    for index, (start, end) in enumerate(ranges):
+        part = f"{prefix}-{index:05}.{'mp4' if video else 'm4a'}"
+        video_options = (
+            ["-map", "0:V:0", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+             "-pix_fmt", "yuv420p"]
+            if video else ["-vn"]
+        )
+        run(
+            FFMPEG, "-v", "error", "-ss", f"{start:.6f}", "-i", source,
+            "-t", f"{end - start:.6f}", *video_options, "-map", "0:a:0",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "48000", part, cwd=stage,
+        )
+        segments.append(part)
+    playlist = stage / f"{prefix}-segments.txt"
+    playlist.write_text("".join(f"file '{part}'\n" for part in segments), encoding="ascii")
+    run(FFMPEG, "-v", "error", "-f", "concat", "-i", playlist.name,
+        "-c", "copy", "-movflags", "+faststart", output_name, cwd=stage)
+    for part in segments:
+        (stage / part).unlink(missing_ok=True)
 
 
 def keep_ranges(log, duration, pause):
@@ -108,6 +135,7 @@ def file_digest(path):
 
 def processing_settings(args):
     return {"pipeline_version": PIPELINE_VERSION, "model": MODEL.name,
+            "remove_retakes": SETTINGS["remove_retakes"], "remove_fillers": SETTINGS["remove_fillers"],
             "language": args.language, "threshold": args.threshold,
             "min_silence": args.min_silence, "keep_pause": args.keep_pause}
 
@@ -208,6 +236,88 @@ def split_cues(cues, max_chars):
     return result
 
 
+def normalize(text):
+    return re.sub(r"[\s.,!?…\"'“”‘’\-–—:;()\[\]]+", "", text)
+
+
+def strip_fillers(text, fillers):
+    if not fillers:
+        return text
+    pattern = "|".join(re.escape(word) + "+" for word in sorted(fillers, key=len, reverse=True))
+    text = re.sub(rf"(?:^|(?<=\s))(?:{pattern})(?=\s|$)", "", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
+def find_content_cuts(cues):
+    """Decide which spoken lines to drop: repeated takes, false starts and lines that are only fillers."""
+    from difflib import SequenceMatcher
+    fillers = SETTINGS["fillers"] if SETTINGS["remove_fillers"] else []
+    filler_only = re.compile("(?:" + "|".join(re.escape(w) + "+" for w in fillers) + ")+") if fillers else None
+    drops = {}
+    for i, cue in enumerate(cues):
+        a = normalize(cue["text"])
+        if filler_only and (not a or filler_only.fullmatch(a)):
+            drops[i] = "filler"
+            continue
+        if not SETTINGS["remove_retakes"] or len(a) < 4:
+            continue
+        for later in cues[i + 1:i + 3]:
+            if later["start"] - cue["end"] > 8000:
+                break
+            b = normalize(strip_fillers(later["text"], fillers))
+            if len(b) < 4:
+                continue
+            if b.startswith(a) or SequenceMatcher(None, a, b[:len(a)]).ratio() >= 0.8:
+                drops[i] = "retake"
+                break
+    return drops
+
+
+def apply_content_cuts(stage, media, cues, duration_ms):
+    drops = find_content_cuts(cues)
+    if not drops:
+        return cues, [], duration_ms
+    removed_spans = []
+    for i, reason in sorted(drops.items()):
+        start = cues[i]["start"]
+        end = cues[i + 1]["start"] - 120 if i + 1 < len(cues) else duration_ms
+        if end - start > 50:
+            removed_spans.append((start, end, cues[i]["text"], reason))
+    merged = []
+    for start, end, *_ in removed_spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    keep, cursor = [], 0
+    for start, end in merged:
+        if start - cursor > 30:
+            keep.append((cursor / 1000, start / 1000))
+        cursor = end
+    if duration_ms - cursor > 30:
+        keep.append((cursor / 1000, duration_ms / 1000))
+    if not keep:
+        return cues, [], duration_ms
+    video = media.suffix.lower() in VIDEO_TYPES
+    cut_and_join(media, keep, stage, video, f"clean{media.suffix}", prefix="clean")
+    os.replace(stage / f"clean{media.suffix}", media)
+
+    def shift(t):
+        return t - sum(min(end, t) - start for start, end in merged if start < t)
+
+    kept = []
+    for i, cue in enumerate(cues):
+        if i in drops:
+            continue
+        start, end = shift(cue["start"]), shift(cue["end"])
+        if end - start > 50:
+            kept.append({**cue, "start": round(start), "end": round(end)})
+    new_duration = sum(b - a for a, b in keep) * 1000
+    removed = [{"text": text, "reason": reason, "seconds": round((end - start) / 1000, 2)}
+               for start, end, text, reason in removed_spans]
+    return kept, removed, new_duration
+
+
 def transcribe(stage, media, language):
     run(FFMPEG, "-v", "error", "-i", media.name,
         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
@@ -228,12 +338,19 @@ def transcribe(stage, media, language):
         for wrong, right in fixes:
             segment["text"] = segment["text"].replace(wrong, right)
     cues, warnings = validate_transcript(data, duration_ms)
+    cues, removed, duration_ms = apply_content_cuts(stage, media, cues, duration_ms)
+    if removed:
+        print(f"  Removed {len(removed)} retakes/fillers "
+              f"({sum(r['seconds'] for r in removed):.1f}s)", flush=True)
+    if SETTINGS["remove_fillers"]:
+        cues = [{**c, "text": strip_fillers(c["text"], SETTINGS["fillers"])} for c in cues]
+        cues = [c for c in cues if c["text"]]
     cues = split_cues(cues, int(SETTINGS["max_caption_chars"]))
     subtitles = stage / "captions.srt"
     write_srt(subtitles, cues)
     report = {"model": MODEL.name, "language": language,
               "duration_ms": round(duration_ms), "caption_count": len(cues),
-              "warnings": warnings}
+              "warnings": warnings, "content_removed": removed}
     return subtitles, report
 
 
@@ -345,28 +462,8 @@ def process(source, signature, args):
 
     with tempfile.TemporaryDirectory(prefix=".edit-", dir=RUNTIME) as directory:
         stage = Path(directory)
-        segments = []
-        for index, (start, end) in enumerate(ranges):
-            part = f"part-{index:05}.{'mp4' if video else 'm4a'}"
-            video_options = (
-                ["-map", "0:V:0", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
-                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
-                 "-pix_fmt", "yuv420p"]
-                if video else ["-vn"]
-            )
-            run(
-                FFMPEG, "-v", "error", "-ss", f"{start:.6f}", "-i", source,
-                "-t", f"{end - start:.6f}", *video_options, "-map", "0:a:0",
-                "-c:a", "aac", "-b:a", "192k", "-ar", "48000", part, cwd=stage,
-            )
-            segments.append(part)
-
-        playlist = stage / "segments.txt"
-        playlist.write_text("".join(f"file '{part}'\n" for part in segments),
-                            encoding="ascii")
         joined = stage / f"joined{media.suffix}"
-        run(FFMPEG, "-v", "error", "-f", "concat", "-i", playlist.name,
-            "-c", "copy", "-movflags", "+faststart", joined.name, cwd=stage)
+        cut_and_join(source, ranges, stage, video, joined.name)
 
         print("  Transcribing...", flush=True)
         subtitles, report = transcribe(stage, joined, args.language)
