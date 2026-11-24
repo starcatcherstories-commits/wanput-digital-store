@@ -1,0 +1,7 @@
+โปรแกรมนี้ใช้เครื่องมือฟรีต่อไปนี้ ขอบคุณผู้พัฒนา:
+- FFmpeg (ffmpeg.org) — LGPL/GPL
+- whisper.cpp (github.com/ggml-org/whisper.cpp) — MIT License
+- Whisper large-v3 model, OpenAI — MIT License
+- Silero VAD (github.com/snakers4/silero-vad) — MIT License
+- Python (python.org) — PSF License
+- PyThaiNLP (pythainlp.org) — Apache License 2.0
