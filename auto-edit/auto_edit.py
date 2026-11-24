@@ -1,306 +1,474 @@
-"""
-Auto Edit — ใส่คลิป → ตัดต่ออัตโนมัติ → ได้คลิปพร้อมซับไทย
-- ตัดช่วงเงียบ (เว้นขอบไว้ ไม่กินคำ)
-- ถอดเสียงไทยในเครื่อง (ฟรี ไม่ใช้ API)
-- ฝังซับไทย + ได้ไฟล์ .srt แยก
-- เฝ้าโฟลเดอร์ตลอด ทำทีละคลิปจนหมดคิว
-"""
+import argparse
+import hashlib
 import json
 import os
+from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
 import time
-import traceback
-from pathlib import Path
-
-BASE = Path(__file__).resolve().parent
-CONFIG_FILE = BASE / "ตั้งค่า.json"
-FIX_FILE = BASE / "คำแก้.txt"
-LOG_FILE = BASE / "บันทึกการทำงาน.txt"
-VIDEO_EXT = {".mp4", ".mov", ".mkv", ".m4v", ".avi", ".webm"}
-
-DEFAULT_CONFIG = {
-    "โฟลเดอร์คลิปเข้า": str(BASE / "1_ใส่คลิปตรงนี้"),
-    "โฟลเดอร์ผลงาน": str(BASE / "2_ผลงานเสร็จ"),
-    "โฟลเดอร์ต้นฉบับที่ทำแล้ว": str(BASE / "3_ต้นฉบับที่ทำแล้ว"),
-    "โฟลเดอร์มีปัญหา": str(BASE / "4_มีปัญหา"),
-    # ตัดเงียบ
-    "ความดังที่ถือว่าเงียบ_dB": -35,
-    "เงียบนานเกินกี่วินาทีถึงตัด": 0.6,
-    "เว้นขอบก่อนหลังคำพูด_วินาที": 0.2,
-    # ซับ
-    "โมเดลถอดเสียง": "large-v3",
-    "คำช่วยถอดเสียง": "โจ้ข่าวฉาว ข่าวนโยบายรัฐ สิทธิ์ประชาชน",
-    "ตัวอักษรต่อบรรทัด": 22,
-    "ฟอนต์": "Leelawadee UI",
-    "ขนาดฟอนต์": 16,
-    "ฝังซับในคลิป": True,
-    "ตรวจโฟลเดอร์ทุกกี่วินาที": 20,
-}
 
 
-def log(msg):
-    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
-    print(line, flush=True)
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+ROOT = Path(__file__).resolve().parent
+INPUT = ROOT / "input"
+OUTPUT = ROOT / "output"
+RUNTIME = ROOT / ".runtime"
+FFMPEG = RUNTIME / "ffmpeg.exe"
+FFPROBE = RUNTIME / "ffprobe.exe"
+WHISPER = RUNTIME / "whisper" / "Release" / "whisper-cli.exe"
+MODEL = ROOT / ".models" / "ggml-large-v3.bin"
+VAD_MODEL = ROOT / ".models" / "ggml-silero-v5.1.2.bin"
+STOP_REQUEST = RUNTIME / "stop.request"
+GENRE_MAP_FILE = ROOT / "genre-map.json"
+GENRE_MAP = json.loads(GENRE_MAP_FILE.read_text(encoding="utf-8")) if GENRE_MAP_FILE.exists() else {}
+VIDEO_TYPES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".mts"}
+AUDIO_TYPES = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"}
+SILENCE_EVENT = re.compile(r"silence_(start|end):\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)")
+PIPELINE_VERSION = 3
 
 
-def load_config():
-    if not CONFIG_FILE.exists():
-        CONFIG_FILE.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2), encoding="utf-8")
-    cfg = dict(DEFAULT_CONFIG)
-    cfg.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
-    return cfg
+def run(program, *arguments, cwd=None):
+    result = subprocess.run(
+        [str(program), *map(str, arguments)],
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode:
+        raise RuntimeError(f"{program.name} exited with {result.returncode}\n"
+                           f"{result.stderr.strip()[-3000:]}")
+    return result
 
 
-def load_fixes():
-    fixes = []
-    if FIX_FILE.exists():
-        for line in FIX_FILE.read_text(encoding="utf-8").splitlines():
-            if "=" in line and not line.strip().startswith("#"):
-                wrong, right = line.split("=", 1)
-                if wrong.strip():
-                    fixes.append((wrong.strip(), right.strip()))
-    return fixes
+def keep_ranges(log, duration, pause):
+    cuts = []
+    start = None
+    # Keep a small breath at both sides of an internal cut.
+    for kind, value in SILENCE_EVENT.findall(log):
+        position = min(duration, max(0.0, float(value)))
+        if kind == "start":
+            start = position
+        elif start is not None:
+            left = start + (pause / 2 if start > 0.03 else 0)
+            right = position - (pause / 2 if position < duration - 0.03 else 0)
+            if right - left > 0.05:
+                cuts.append((left, right))
+            start = None
+    if start is not None and duration > start:
+        cuts.append((start + (pause / 2 if start > 0.03 else 0), duration))
+
+    cursor = 0.0
+    ranges = []
+    for left, right in cuts:
+        if left - cursor > 0.03:
+            ranges.append((cursor, left))
+        cursor = max(cursor, right)
+    if duration - cursor > 0.03:
+        ranges.append((cursor, duration))
+    return ranges
 
 
-def run(cmd):
-    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if p.returncode != 0:
-        raise RuntimeError(p.stderr[-2000:])
-    return p
+def destinations(source):
+    name = source.stem if source.suffix.lower() == ".mp4" else source.name
+    audio = source.suffix.lower() in AUDIO_TYPES
+    extension = "m4a" if audio else "mp4"
+    destination = OUTPUT / "พร้อมใช้" / name
+    return destination / f"{name}.edited.{extension}", destination / "ซับ" / f"{name}.edited.srt"
 
 
-def duration(path):
-    p = run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)])
-    return float(p.stdout.strip())
+def srt_time(milliseconds):
+    seconds, milliseconds = divmod(round(milliseconds), 1000)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours:02}:{minutes:02}:{seconds:02},{milliseconds:03}"
 
 
-def has_audio(path):
-    p = run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", str(path)])
-    return bool(p.stdout.strip())
+def file_digest(path):
+    with Path(path).open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-# ---------- 1) ตัดช่วงเงียบ ----------
-def find_keep_ranges(path, cfg):
-    total = duration(path)
-    p = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-i", str(path), "-af",
-         f"silencedetect=noise={cfg['ความดังที่ถือว่าเงียบ_dB']}dB:d={cfg['เงียบนานเกินกี่วินาทีถึงตัด']}",
-         "-f", "null", "-"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace")
-    starts = [float(x) for x in re.findall(r"silence_start: ([\d.]+)", p.stderr)]
-    ends = [float(x) for x in re.findall(r"silence_end: ([\d.]+)", p.stderr)]
-    if len(ends) < len(starts):
-        ends.append(total)
-    pad = cfg["เว้นขอบก่อนหลังคำพูด_วินาที"]
-    keep, cur = [], 0.0
-    for s, e in zip(starts, ends):
-        cut_from, cut_to = s + pad, e - pad
-        if cut_to - cut_from < 0.1:
+def processing_settings(args):
+    return {"pipeline_version": PIPELINE_VERSION, "model": MODEL.name,
+            "language": args.language, "threshold": args.threshold,
+            "min_silence": args.min_silence, "keep_pause": args.keep_pause}
+
+
+def write_srt(path, cues):
+    path.write_text("\n".join(
+        f"{index}\n{srt_time(cue['start'])} --> {srt_time(cue['end'])}\n{cue['text']}\n"
+        for index, cue in enumerate(cues, 1)), encoding="utf-8")
+
+
+def validate_transcript(data, duration_ms):
+    cues = []
+    warnings = []
+    previous_end = 0
+    for segment in data["transcription"]:
+        text = segment["text"].strip()
+        if not text or re.fullmatch(r"\[[^\]]*\]|\([^)]*\)", text):
             continue
-        if cut_from > cur:
-            keep.append((cur, cut_from))
-        cur = cut_to
-    if cur < total:
-        keep.append((cur, total))
-    keep = [(a, b) for a, b in keep if b - a > 0.05]
-    return keep or [(0.0, total)], total
+        if "\ufffd" in text:
+            raise ValueError("Caption text contains damaged Unicode. Output was not replaced.")
+        start = segment["offsets"]["from"]
+        end = segment["offsets"]["to"]
+        index = len(cues) + 1
+        if start < 0 or end <= start or end > duration_ms + 1000:
+            raise ValueError(f"Caption {index} has timestamps outside the edited audio.")
+        if start < previous_end - 100:
+            raise ValueError(f"Caption {index} overlaps the previous caption.")
+        start = max(previous_end, min(start, duration_ms))
+        end = min(end, duration_ms)
+        if end <= start:
+            raise ValueError(f"Caption {index} has no display time.")
+        probabilities = [token["p"] for token in segment.get("tokens", [])
+                         if token["text"].strip() and not token["text"].startswith(("<|", "[_"))]
+        confidence = sum(probabilities) / len(probabilities) if probabilities else None
+        reasons = []
+        if confidence is not None and confidence < 0.65:
+            reasons.append("low_recognition_confidence")
+        if end - start > 10000:
+            reasons.append("long_caption_check_timing")
+        if len(text) / ((end - start) / 1000) > 35:
+            reasons.append("caption_too_fast")
+        if reasons:
+            warnings.append({"cue": index, "text": text, "confidence": confidence,
+                             "reasons": reasons})
+        cues.append({"start": start, "end": end, "text": text})
+        previous_end = end
+    if not cues:
+        raise ValueError("No speech captions were recognized. Output was not replaced.")
+    return cues, warnings
 
 
-def cut_silence(src, dst, cfg, tmp):
-    if not has_audio(src):
-        shutil.copy(src, dst)
-        return
-    keep, total = find_keep_ranges(src, cfg)
-    kept = sum(b - a for a, b in keep)
-    log(f"   ตัดเงียบ: {total:.1f} วิ → {kept:.1f} วิ ({len(keep)} ช่วง)")
-    parts = []
-    for i, (a, b) in enumerate(keep):
-        parts.append(f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS[v{i}];"
-                     f"[0:a]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[a{i}];")
-    parts.append("".join(f"[v{i}][a{i}]" for i in range(len(keep))) + f"concat=n={len(keep)}:v=1:a=1[v][a]")
-    script = Path(tmp) / "cut.txt"
-    script.write_text("\n".join(parts), encoding="utf-8")
-    run(["ffmpeg", "-y", "-hide_banner", "-i", str(src), "-filter_complex_script", str(script),
-         "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-         "-c:a", "aac", "-b:a", "192k", str(dst)])
+def transcribe(stage, media, language):
+    run(FFMPEG, "-v", "error", "-i", media.name,
+        "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+        "speech.wav", cwd=stage)
+    # This Windows whisper-cli build cannot open non-ASCII model arguments.
+    # Model and staging directories share a drive, so relative paths stay ASCII.
+    run(WHISPER, "-m", os.path.relpath(MODEL, stage),
+        "-vm", os.path.relpath(VAD_MODEL, stage), "--vad", "-f", "speech.wav",
+        "-l", language, "-ng", "-ojf", "-of", "captions",
+        "-ml", "60", "-sow", "-mc", "0", "-t", min(8, os.cpu_count() or 4), cwd=stage)
+    duration_ms = float(json.loads(run(FFPROBE, "-v", "error", "-show_format",
+                                      "-of", "json", media).stdout)["format"]["duration"]) * 1000
+    # whisper.cpp writes partial UTF-8 bytes for individual Thai tokens in full JSON.
+    # Segment text remains complete. Replacement is limited to decoding token fragments.
+    data = json.loads((stage / "captions.json").read_text(encoding="utf-8", errors="replace"))
+    cues, warnings = validate_transcript(data, duration_ms)
+    subtitles = stage / "captions.srt"
+    write_srt(subtitles, cues)
+    report = {"model": MODEL.name, "language": language,
+              "duration_ms": round(duration_ms), "caption_count": len(cues),
+              "warnings": warnings}
+    return subtitles, report
 
 
-# ---------- 2) ถอดเสียงเป็นซับไทย ----------
-_model = None
-
-
-def get_model(cfg):
-    global _model
-    if _model is None:
-        from faster_whisper import WhisperModel
-        log(f"   โหลดโมเดลถอดเสียง {cfg['โมเดลถอดเสียง']} (ครั้งแรกจะดาวน์โหลด รอสักครู่)")
-        try:
-            _model = WhisperModel(cfg["โมเดลถอดเสียง"], device="cuda", compute_type="float16")
-            log("   ใช้การ์ดจอเร่งความเร็ว")
-        except Exception:
-            _model = WhisperModel(cfg["โมเดลถอดเสียง"], device="cpu", compute_type="int8")
-    return _model
-
-
-_dict = None
-
-
-def thai_words(text, keep_words=()):
-    global _dict
-    from pythainlp.tokenize import word_tokenize
-    from pythainlp.corpus.common import thai_words as base_words
-    from pythainlp.util import dict_trie
-    if _dict is None:
-        _dict = dict_trie(set(base_words()) | {w for w in keep_words if w})
-    return word_tokenize(text, custom_dict=_dict, engine="newmm", keep_whitespace=True)
-
-
-def split_line(text, start, end, max_chars, keep_words=()):
-    """แบ่งประโยคยาวเป็นท่อนสั้น ไม่ตัดกลางคำ แบ่งเวลาตามจำนวนตัวอักษร"""
-    if len(text) <= max_chars:
-        return [(start, end, text)]
-    chunks, cur = [], ""
-    for w in thai_words(text, keep_words):
-        if len(cur) + len(w) > max_chars and cur.strip():
-            chunks.append(cur.strip())
-            cur = w
-        else:
-            cur += w
-    if cur.strip():
-        if chunks and len(cur.strip()) < 6:
-            chunks[-1] += cur.rstrip()  # ไม่ให้คำสั้นๆ ค้างบรรทัดเดียว
-        else:
-            chunks.append(cur.strip())
-    total_chars = sum(len(c) for c in chunks) or 1
-    out, t = [], start
-    for c in chunks:
-        d = (end - start) * len(c) / total_chars
-        out.append((t, t + d, c))
-        t += d
-    return out
-
-
-def transcribe(video, cfg, fixes):
-    model = get_model(cfg)
-    segments, _ = model.transcribe(
-        str(video), language="th", beam_size=5, vad_filter=True,
-        initial_prompt=cfg["คำช่วยถอดเสียง"] or None, condition_on_previous_text=False)
-    keep_words = cfg["คำช่วยถอดเสียง"].split() + [r for _, r in fixes]
-    lines = []
-    for seg in segments:
-        text = seg.text.strip()
-        for wrong, right in fixes:
-            text = text.replace(wrong, right)
-        if text:
-            lines.extend(split_line(text, seg.start, seg.end, cfg["ตัวอักษรต่อบรรทัด"], keep_words))
-    return lines
-
-
-def ts(t):
-    ms = int(round(t * 1000))
-    h, ms = divmod(ms, 3600000)
-    m, ms = divmod(ms, 60000)
-    s, ms = divmod(ms, 1000)
-    return f"{h:02}:{m:02}:{s:02},{ms:03}"
-
-
-def write_srt(lines, path):
-    with open(path, "w", encoding="utf-8") as f:
-        for i, (a, b, t) in enumerate(lines, 1):
-            f.write(f"{i}\n{ts(a)} --> {ts(b)}\n{t}\n\n")
-
-
-# ---------- 3) ฝังซับ ----------
-def burn_subs(video, srt, dst, cfg, tmp):
-    # คัดลอก srt ไปไว้ชื่อง่ายๆ เพื่อเลี่ยงปัญหา path ภาษาไทย/ไดรฟ์ใน ffmpeg
-    simple = Path(tmp) / "sub.srt"
-    shutil.copy(srt, simple)
-    style = (f"FontName={cfg['ฟอนต์']},FontSize={cfg['ขนาดฟอนต์']},PrimaryColour=&H00FFFFFF,"
-             "OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV=40")
-    p = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-i", str(video), "-vf",
-                        f"subtitles=sub.srt:force_style='{style}'", "-c:v", "libx264", "-preset", "veryfast",
-                        "-crf", "18", "-c:a", "copy", str(dst)],
-                       cwd=tmp, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if p.returncode != 0:
-        raise RuntimeError(p.stderr[-2000:])
-
-
-# ---------- งานหลัก ----------
-def process(src, cfg, fixes):
-    out_dir = Path(cfg["โฟลเดอร์ผลงาน"])
-    name = src.stem
-    with tempfile.TemporaryDirectory() as tmp:
-        cut = Path(tmp) / "cut.mp4"
-        cut_silence(src, cut, cfg, tmp)
-        log("   กำลังถอดเสียงทำซับ...")
-        lines = transcribe(cut, cfg, fixes)
-        srt = out_dir / f"{name}.srt"
-        write_srt(lines, srt)
-        final = Path(tmp) / "final.mp4"
-        if cfg["ฝังซับในคลิป"] and lines:
-            log("   กำลังฝังซับ...")
-            burn_subs(cut, srt, final, cfg, tmp)
-        else:
-            shutil.copy(cut, final)
-        shutil.move(str(final), out_dir / f"{name}_ตัดแล้ว.mp4")
-
-
-def is_ready(path):
-    """ไฟล์ต้องขนาดคงที่ (copy/ซิงก์ Drive เสร็จแล้ว) ถึงจะเริ่มทำ"""
+def archive_review(draft, subtitles, report_path):
+    archive = RUNTIME / "ซับที่ตรวจแล้ว"
+    archive.mkdir(exist_ok=True)
+    destination = Path(tempfile.mkdtemp(prefix="review-", dir=archive))
+    moved = []
     try:
-        s1 = path.stat().st_size
-        time.sleep(3)
-        return s1 > 0 and s1 == path.stat().st_size
+        for path in (draft, subtitles, report_path):
+            path.rename(destination / path.name)
+            moved.append(path)
     except OSError:
-        return False
+        for path in reversed(moved):
+            (destination / path.name).rename(path)
+        destination.rmdir()
+        raise
 
 
-def safe_move(src, folder):
-    folder.mkdir(parents=True, exist_ok=True)
-    dst = folder / src.name
-    if dst.exists():
-        dst = folder / f"{src.stem}_{int(time.time())}{src.suffix}"
-    shutil.move(str(src), dst)
+def render_reviewed(subtitles, cover_old_subtitles=False):
+    subtitles = subtitles.resolve()
+    review = (OUTPUT / "รอตรวจ").resolve()
+    if subtitles.parent != review or subtitles.suffix.lower() != ".srt":
+        raise ValueError("Select an SRT file from output/รอตรวจ.")
+    report_path = subtitles.with_suffix(".review.json")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    text = subtitles.read_text(encoding="utf-8-sig").strip()
+    segments = []
+    for block in re.split(r"\r?\n\s*\r?\n", text):
+        lines = block.splitlines()
+        if len(lines) < 3 or not lines[0].isdigit():
+            raise ValueError("Invalid SRT cue.")
+        match = re.fullmatch(r"(\d+):([0-5]\d):([0-5]\d),(\d{3}) --> (\d+):([0-5]\d):([0-5]\d),(\d{3})", lines[1])
+        if not match:
+            raise ValueError("Invalid SRT timestamps.")
+        numbers = list(map(int, match.groups()))
+        def milliseconds(values):
+            hours, minutes, seconds, fraction = values
+            return ((hours * 60 + minutes) * 60 + seconds) * 1000 + fraction
+        segments.append({"text": "\n".join(lines[2:]), "offsets": {
+            "from": milliseconds(numbers[:4]), "to": milliseconds(numbers[4:])}})
+    media = (OUTPUT / report["media_destination"]).resolve()
+    final_srt = (OUTPUT / report["subtitle_destination"]).resolve()
+    if not media.is_relative_to(OUTPUT.resolve()) or not final_srt.is_relative_to(OUTPUT.resolve()):
+        raise ValueError("Invalid review destination.")
+    draft = review / media.name
+    if cover_old_subtitles and media.suffix.lower() not in VIDEO_TYPES:
+        raise ValueError("Covering old subtitles requires a video draft.")
+    if report.get("draft_sha256") != file_digest(draft):
+        raise ValueError("The draft video differs from the caption review. Generate a new matching draft.")
+    duration_ms = float(json.loads(run(FFPROBE, "-v", "error", "-show_format",
+                                      "-of", "json", draft).stdout)["format"]["duration"]) * 1000
+    cues, _ = validate_transcript({"transcription": segments}, duration_ms)
+    with tempfile.TemporaryDirectory(prefix=".review-", dir=RUNTIME) as directory:
+        stage = Path(directory)
+        write_srt(stage / "captions.srt", cues)
+        completed = stage / media.name
+        if media.suffix.lower() in VIDEO_TYPES:
+            filters = "subtitles=captions.srt:force_style='FontName=Leelawadee UI,FontSize=13,Outline=2,MarginV=24'"
+            if cover_old_subtitles:
+                filters = "drawbox=x=0:y=ih*0.80:w=iw:h=ih*0.20:color=black:t=fill," + filters
+            run(FFMPEG, "-v", "error", "-i", draft,
+                "-vf", filters,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+                "-c:a", "copy", "-movflags", "+faststart", completed, cwd=stage)
+        else:
+            import shutil
+            shutil.copy2(draft, completed)
+        media.parent.mkdir(parents=True, exist_ok=True)
+        final_srt.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(stage / "captions.srt", final_srt)
+        os.replace(completed, media)
+        report["status"] = "reviewed"
+        report["covered_old_subtitles"] = cover_old_subtitles
+        report["caption_count"] = len(cues)
+        report["final_srt_sha256"] = file_digest(final_srt)
+        report["final_media_sha256"] = file_digest(media)
+        final_srt.with_suffix(".quality.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    archive_review(draft, subtitles, report_path)
+    print(f"Saved reviewed captions: {media}", flush=True)
+
+
+def process(source, signature, args):
+    media, srt = destinations(source)
+    source_hash = file_digest(source)
+    if fingerprint(source) != signature:
+        raise ValueError("The source is still changing. Wait for the copy to finish.")
+    details = json.loads(run(
+        FFPROBE, "-v", "error", "-show_format", "-show_streams",
+        "-of", "json", source,
+    ).stdout)
+    duration = float(details["format"]["duration"])
+    streams = details["streams"]
+    if not any(stream["codec_type"] == "audio" for stream in streams):
+        raise ValueError("The source has no audio track.")
+    video = source.suffix.lower() in VIDEO_TYPES
+    detected = run(
+        FFMPEG, "-hide_banner", "-i", source, "-map", "0:a:0",
+        "-af", f"silencedetect=n={args.threshold}dB:d={args.min_silence}",
+        "-f", "null", "-",
+    ).stderr
+    ranges = keep_ranges(detected, duration, args.keep_pause)
+    if not ranges:
+        raise ValueError("The source appears to be entirely silent.")
+    print(f"  Keeping {sum(end - start for start, end in ranges):.1f}s of "
+          f"{duration:.1f}s ({len(ranges)} segments)", flush=True)
+
+    with tempfile.TemporaryDirectory(prefix=".edit-", dir=RUNTIME) as directory:
+        stage = Path(directory)
+        segments = []
+        for index, (start, end) in enumerate(ranges):
+            part = f"part-{index:05}.{'mp4' if video else 'm4a'}"
+            video_options = (
+                ["-map", "0:V:0", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+                 "-pix_fmt", "yuv420p"]
+                if video else ["-vn"]
+            )
+            run(
+                FFMPEG, "-v", "error", "-ss", f"{start:.6f}", "-i", source,
+                "-t", f"{end - start:.6f}", *video_options, "-map", "0:a:0",
+                "-c:a", "aac", "-b:a", "192k", "-ar", "48000", part, cwd=stage,
+            )
+            segments.append(part)
+
+        playlist = stage / "segments.txt"
+        playlist.write_text("".join(f"file '{part}'\n" for part in segments),
+                            encoding="ascii")
+        joined = stage / f"joined{media.suffix}"
+        run(FFMPEG, "-v", "error", "-f", "concat", "-i", playlist.name,
+            "-c", "copy", "-movflags", "+faststart", joined.name, cwd=stage)
+
+        print("  Transcribing...", flush=True)
+        subtitles, report = transcribe(stage, joined, args.language)
+        report["source_sha256"] = source_hash
+        report["source_path"] = str(source.resolve())
+        report["settings"] = processing_settings(args)
+        report["original_duration_seconds"] = duration
+        report["kept_ranges_seconds"] = ranges
+        report["silence_removed_seconds"] = duration - sum(b-a for a,b in ranges)
+        caption_count = report["caption_count"]
+        if fingerprint(source) != signature or file_digest(source) != source_hash:
+            raise ValueError("The source changed during transcription. Output was not replaced.")
+        if args.draft:
+            review = OUTPUT / "รอตรวจ"
+            review.mkdir(exist_ok=True)
+            report["source_signature"] = list(signature)
+            report["status"] = "draft"
+            report["draft_sha256"] = file_digest(joined)
+            report["media_destination"] = str(media.relative_to(OUTPUT))
+            report["subtitle_destination"] = str(srt.relative_to(OUTPUT))
+            os.replace(subtitles, review / srt.name)
+            os.replace(joined, review / media.name)
+            # The report is the completion marker; write it after both draft files.
+            (review / f"{media.stem}.review.json").write_text(
+                json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"  Caption draft: {review / srt.name}. Captions were not burned.", flush=True)
+            return
+        final = joined
+        if video and caption_count:
+            final = stage / "captioned.mp4"
+            run(FFMPEG, "-v", "error", "-i", joined.name,
+                "-vf", "subtitles=captions.srt:force_style='FontName=Leelawadee UI,FontSize=13,Outline=2,MarginV=24'",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+                "-c:a", "copy", "-movflags", "+faststart", final.name, cwd=stage)
+        if fingerprint(source) != signature:
+            raise ValueError("The source changed during processing. It will be picked up again.")
+        media.parent.mkdir(parents=True, exist_ok=True)
+        srt.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(subtitles, srt)
+        os.replace(final, media)
+        report["status"] = "automatic"
+        report["final_srt_sha256"] = file_digest(srt)
+        report["final_media_sha256"] = file_digest(media)
+        srt.with_suffix(".quality.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"  Saved {media.name} + {srt.name} ({caption_count} captions)", flush=True)
+
+
+def fingerprint(path):
+    stat = path.stat()
+    return stat.st_size, stat.st_mtime_ns
+
+
+def watch(args):
+    observed = {}
+    attempted = {}
+    failed = False
+    print(f"Input:  {INPUT}\nOutput: {OUTPUT}", flush=True)
+    if not args.once:
+        print("Watching for files. Press Ctrl+C to stop.", flush=True)
+    while True:
+        files = sorted(INPUT.iterdir())
+        present = set(files)
+        observed = {k: v for k, v in observed.items() if k in present}
+        attempted = {k: v for k, v in attempted.items() if k in present}
+        for source in files:
+            if not args.once and STOP_REQUEST.exists():
+                break
+            if not source.is_file() or source.suffix.lower() not in VIDEO_TYPES | AUDIO_TYPES:
+                continue
+            try:
+                signature = fingerprint(source)
+                prior_signature, first_seen = observed.get(source, (None, 0.0))
+                if prior_signature != signature:
+                    first_seen = time.monotonic()
+                    observed[source] = signature, first_seen
+                if not args.once and time.monotonic() - first_seen < 5:
+                    continue
+                if not signature[0] or attempted.get(source) == signature:
+                    continue
+                attempted[source] = signature
+                media, srt = destinations(source)
+                source_hash = file_digest(source)
+                settings = processing_settings(args)
+                review_report = OUTPUT / "รอตรวจ" / f"{media.stem}.review.json"
+                if args.draft and review_report.exists():
+                    review = json.loads(review_report.read_text(encoding="utf-8"))
+                    draft_media = review_report.parent / media.name
+                    draft_srt = review_report.parent / srt.name
+                    if (review.get("status") == "draft" and review.get("source_sha256") == source_hash and review.get("settings") == settings
+                            and draft_media.is_file() and draft_srt.is_file()
+                            and review.get("draft_sha256") == file_digest(draft_media)):
+                        continue
+                    if review.get("status") != "reviewed" and not args.replace_existing:
+                        raise FileExistsError("A different or incomplete draft exists. Use --replace-existing to replace it.")
+                quality = srt.with_suffix(".quality.json")
+                if media.exists() or srt.exists():
+                    if media.is_file() and srt.is_file() and quality.is_file():
+                        completed = json.loads(quality.read_text(encoding="utf-8"))
+                        if (completed.get("source_sha256") == source_hash and completed.get("settings") == settings
+                                and completed.get("final_media_sha256") == file_digest(media)
+                                and completed.get("final_srt_sha256") == file_digest(srt)):
+                            continue
+                    if not args.replace_existing:
+                        raise FileExistsError("Existing output has no matching source identity. Use --replace-existing to regenerate it.")
+                print(f"Editing {source.name}", flush=True)
+                process(source, signature, args)
+            except Exception as error:
+                failed = True
+                print(f"Could not edit {source.name}: {error}", file=sys.stderr, flush=True)
+        if args.once:
+            return int(failed)
+        if STOP_REQUEST.exists():
+            STOP_REQUEST.unlink(missing_ok=True)
+            print("Stopped.", flush=True)
+            return 0
+        time.sleep(2)
 
 
 def main():
-    cfg = load_config()
-    folders = {k: Path(cfg[k]) for k in
-               ["โฟลเดอร์คลิปเข้า", "โฟลเดอร์ผลงาน", "โฟลเดอร์ต้นฉบับที่ทำแล้ว", "โฟลเดอร์มีปัญหา"]}
-    for f in folders.values():
-        f.mkdir(parents=True, exist_ok=True)
-    log(f"เริ่มทำงาน — รอคลิปที่: {folders['โฟลเดอร์คลิปเข้า']}")
-    once = "--once" in sys.argv
-    while True:
-        cfg = load_config()
-        fixes = load_fixes()
-        clips = sorted(p for p in folders["โฟลเดอร์คลิปเข้า"].iterdir()
-                       if p.is_file() and p.suffix.lower() in VIDEO_EXT)
-        for i, clip in enumerate(clips, 1):
-            if not is_ready(clip):
-                continue
-            log(f"[{i}/{len(clips)}] {clip.name}")
-            t0 = time.time()
-            try:
-                process(clip, cfg, fixes)
-                safe_move(clip, folders["โฟลเดอร์ต้นฉบับที่ทำแล้ว"])
-                log(f"   ✅ เสร็จ ({time.time() - t0:.0f} วิ)")
-            except Exception:
-                log("   ❌ มีปัญหา ย้ายไปโฟลเดอร์มีปัญหา\n" + traceback.format_exc()[-1500:])
-                try:
-                    safe_move(clip, folders["โฟลเดอร์มีปัญหา"])
-                except Exception:
-                    pass
-        if once:
-            break
-        time.sleep(cfg["ตรวจโฟลเดอร์ทุกกี่วินาที"])
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+    parser = argparse.ArgumentParser(description="Cut silence and caption media from input/.")
+    parser.add_argument("--once", action="store_true", help="Process existing files and exit.")
+    parser.add_argument("--stop", action="store_true", help="Stop the watcher after the current file.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--draft", dest="draft", action="store_true", help="Write video and SRT to output/รอตรวจ for checking (optional).")
+    mode.add_argument("--burn-subtitles", dest="draft", action="store_false", help="Burn subtitles automatically (default); warnings are recorded in the quality report.")
+    parser.set_defaults(draft=False)
+    parser.add_argument("--replace-existing", action="store_true", help="Regenerate existing output or a draft with a different source identity.")
+    parser.add_argument("--approve", type=Path, metavar="SRT", help="Burn an edited/reviewed SRT from output/รอตรวจ without retranscribing.")
+    parser.add_argument("--cover-old-subtitles", action="store_true", help="With --approve, cover the bottom 20%% of a video before burning the reviewed SRT.")
+    parser.add_argument("--language", default="th", help="Spoken language (default: th). Use auto for mixed batches.")
+    parser.add_argument("--threshold", type=float, default=-38, help="Silence threshold in dB.")
+    parser.add_argument("--min-silence", type=float, default=0.40)
+    parser.add_argument("--keep-pause", type=float, default=0.16)
+    args = parser.parse_args()
+    if args.cover_old_subtitles and not args.approve:
+        parser.error("--cover-old-subtitles requires --approve.")
+    if args.stop:
+        STOP_REQUEST.touch()
+        print("Stop requested. The watcher will finish its current file.")
+        return 0
+    if not args.min_silence > args.keep_pause >= 0:
+        parser.error("Require --min-silence > --keep-pause >= 0.")
+    if not FFMPEG.is_file() or not FFPROBE.is_file():
+        parser.error("FFmpeg tools are missing from .runtime.")
+    if not WHISPER.is_file() or not MODEL.is_file() or not VAD_MODEL.is_file():
+        parser.error("Whisper, large-v3, or the Silero VAD model is missing.")
+    INPUT.mkdir(exist_ok=True)
+    OUTPUT.mkdir(exist_ok=True)
+    import msvcrt
+
+    with (RUNTIME / "watch.lock").open("a+b") as lock:
+        lock.seek(0)
+        try:
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            parser.error("Another editor instance is already open.")
+        try:
+            if args.approve:
+                render_reviewed(args.approve, args.cover_old_subtitles)
+                return 0
+            if not args.once:
+                STOP_REQUEST.unlink(missing_ok=True)
+            return watch(args)
+        except KeyboardInterrupt:
+            print("\nStopped.")
+            return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
